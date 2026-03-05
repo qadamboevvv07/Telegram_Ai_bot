@@ -9,18 +9,24 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# --- KONFIGURATSIYA ---
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# --- KONFIGURATSIYA (XAVFSIZ VA MUSTAHKAM) ---
+# .strip() — kalitlar atrofidagi tasodifiy bo'sh joylarni tozalaydi
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 
-# Agar kalitlar yo'q bo'lsa xato berish (loglarda ko'rinadi)
+# Bot ishga tushishidan oldin kalitlar borligini tekshiramiz
 if not TELEGRAM_TOKEN or not GROQ_API_KEY:
-    print("XATO: TELEGRAM_TOKEN yoki GROQ_API_KEY o'rnatilmagan!")
-    exit()
+    print("❌ XATO: API kalitlar topilmadi yoki xato o'rnatilgan!")
+    print("Iltimos, Render Settings -> Environment bo'limini tekshiring.")
+    exit(1)
 
-client = Groq(api_key=GROQ_API_KEY)
-bot = Bot(token=TELEGRAM_TOKEN)
-dp = Dispatcher()
+try:
+    client = Groq(api_key=GROQ_API_KEY)
+    bot = Bot(token=TELEGRAM_TOKEN)
+    dp = Dispatcher()
+except Exception as e:
+    print(f"❌ Botni ishga tushirishda xato: {e}")
+    exit(1)
 
 user_games = {}
 
@@ -57,39 +63,35 @@ async def cmd_start(message: types.Message):
 # --- OVOZLI XABAR (WHISPER) ---
 @dp.message(F.voice)
 async def handle_voice(message: types.Message):
-    await message.answer("🎤 Ovozni eshityapman...")
-    file_id = message.voice.file_id
-    file = await bot.get_file(file_id)
-    content = await bot.download_file(file.file_path)
-    
-    # Audio faylni vaqtinchalik saqlash
-    audio_path = f"audio_{file_id}.ogg"
-    with open(audio_path, "wb") as f:
-        f.write(content.read())
-
+    msg = await message.answer("🎤 Ovozni eshityapman...")
     try:
-        with open(audio_path, "rb") as af:
-            tr = client.audio.transcriptions.create(
-                file=(audio_path, af.read()), 
-                model="whisper-large-v3", 
-                response_format="text"
-            )
-        await message.reply(f"📝 **Matn:** {tr}")
+        file_id = message.voice.file_id
+        file = await bot.get_file(file_id)
+        content = await bot.download_file(file.file_path)
+        
+        # Audio faylni vaqtinchalik xotirada saqlash
+        audio_data = content.read()
+
+        tr = client.audio.transcriptions.create(
+            file=("audio.ogg", audio_data), 
+            model="whisper-large-v3", 
+            response_format="text"
+        )
+        await msg.edit_text(f"📝 **Matn:** {tr}")
     except Exception as e:
-        await message.reply("Ovoz tahlilida xato! ❌")
-    finally:
-        if os.path.exists(audio_path):
-            os.remove(audio_path)
+        print(f"Whisper xatosi: {e}")
+        await msg.edit_text("Ovoz tahlilida xato! ❌ (Limit tugagan bo'lishi mumkin)")
 
 # --- RASM TAHLILI (VISION) ---
 @dp.message(F.photo)
 async def handle_photo(message: types.Message):
-    await message.answer("🧐 Rasmga qarayapman...")
-    photo = message.photo[-1]
-    file = await bot.get_file(photo.file_id)
-    content = await bot.download_file(file.file_path)
-    b64 = base64.b64encode(content.read()).decode('utf-8')
+    msg = await message.answer("🧐 Rasmga qarayapman...")
     try:
+        photo = message.photo[-1]
+        file = await bot.get_file(photo.id)
+        content = await bot.download_file(file.file_path)
+        b64 = base64.b64encode(content.read()).decode('utf-8')
+        
         res = client.chat.completions.create(
             model="llama-3.2-11b-vision-preview",
             messages=[{"role": "user", "content": [
@@ -97,9 +99,10 @@ async def handle_photo(message: types.Message):
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
             ]}]
         )
-        await message.reply(res.choices[0].message.content)
-    except:
-        await message.reply("Rasm tahlilida xato! 🛠")
+        await msg.edit_text(res.choices[0].message.content)
+    except Exception as e:
+        print(f"Vision xatosi: {e}")
+        await msg.edit_text("Rasm tahlilida xato! 🛠")
 
 # --- MATN VA O'YIN ---
 @dp.message(F.text)
@@ -115,7 +118,7 @@ async def handle_text(message: types.Message):
             await message.answer("⬆️ Kattaroq" if num < user_games[uid] else "⬇️ Kichikroq")
         return
 
-    if any(x in text for x in ["yaratgan", "muallif", "dasturchi"]):
+    if any(x in text for x in ["yaratgan", "muallif", "dasturchi", "admin"]):
         return await message.answer("🚀 Meni **Qadamboyev Amirbek** yaratgan! 😎")
 
     try:
@@ -127,7 +130,8 @@ async def handle_text(message: types.Message):
             ]
         )
         await message.answer(res.choices[0].message.content)
-    except:
+    except Exception as e:
+        print(f"AI xatosi: {e}")
         await message.answer("AI hozir band... 😴")
 
 # --- CALLBACKS ---
@@ -145,7 +149,12 @@ async def admin_info(call: types.CallbackQuery):
 # --- RENDER UCHUN ASOSIY QISM ---
 async def main():
     print("Bot xavfsiz rejimda ishga tushdi... ✅")
-    await dp.start_polling(bot, skip_updates=True)
+    # Eski xabarlarni o'tkazib yuborish
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        print("Bot to'xtatildi.")
