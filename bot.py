@@ -1,36 +1,30 @@
 import os
 import asyncio
-import requests
 import qrcode
 import io
-import threading
 import base64
 import random
-from flask import Flask
 from groq import Groq
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# --- RENDER PORTNI SAQLASH ---
-app = Flask('')
-@app.route('/')
-def home(): return "Bot is live!"
-
-def run_flask():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
-
 # --- KONFIGURATSIYA ---
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+# Agar kalitlar yo'q bo'lsa xato berish (loglarda ko'rinadi)
+if not TELEGRAM_TOKEN or not GROQ_API_KEY:
+    print("XATO: TELEGRAM_TOKEN yoki GROQ_API_KEY o'rnatilmagan!")
+    exit()
+
 client = Groq(api_key=GROQ_API_KEY)
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 
 user_games = {}
 
-# --- ASOSIY MENYU (ROYXAT) ---
+# --- ASOSIY MENYU ---
 def main_menu():
     builder = InlineKeyboardBuilder()
     builder.row(types.InlineKeyboardButton(text="🧠 AI Chat", callback_data="ai_h"))
@@ -52,11 +46,10 @@ async def cmd_start(message: types.Message):
         f"Assalomu alaykum, {message.from_user.full_name}! ✨\n\n"
         "🚀 **Men Amirbek Super AI botiman.**\n"
         "Menda quyidagi super-imkoniyatlar bor:\n\n"
-        "1️⃣ **AI Chat** - Har qanday savolga javob beraman.\n"
-        "2️⃣ **Vision** - Rasmlarni ko'rib, tahlil qilaman.\n"
+        "1️⃣ **AI Chat** - Savollarga javob beraman.\n"
+        "2️⃣ **Vision** - Rasmlarni tahlil qilaman.\n"
         "3️⃣ **Whisper** - Ovozli xabarlarni yozuvga o'giraman.\n"
-        "4️⃣ **Fun** - Zerikkanda mini-o'yinlar o'ynaymiz.\n"
-        "5️⃣ **Utility** - Valyuta kursi va QR kod yasash.\n\n"
+        "4️⃣ **Fun** - Mini-o'yinlar.\n\n"
         "👇 Boshlash uchun tugmalardan foydalaning!",
         reply_markup=main_menu(), parse_mode="Markdown"
     )
@@ -65,14 +58,28 @@ async def cmd_start(message: types.Message):
 @dp.message(F.voice)
 async def handle_voice(message: types.Message):
     await message.answer("🎤 Ovozni eshityapman...")
-    file = await bot.get_file(message.voice.file_id)
+    file_id = message.voice.file_id
+    file = await bot.get_file(file_id)
     content = await bot.download_file(file.file_path)
-    with open("audio.ogg", "wb") as f: f.write(content.read())
+    
+    # Audio faylni vaqtinchalik saqlash
+    audio_path = f"audio_{file_id}.ogg"
+    with open(audio_path, "wb") as f:
+        f.write(content.read())
+
     try:
-        with open("audio.ogg", "rb") as af:
-            tr = client.audio.transcriptions.create(file=("audio.ogg", af.read()), model="whisper-large-v3", response_format="text")
+        with open(audio_path, "rb") as af:
+            tr = client.audio.transcriptions.create(
+                file=(audio_path, af.read()), 
+                model="whisper-large-v3", 
+                response_format="text"
+            )
         await message.reply(f"📝 **Matn:** {tr}")
-    except: await message.reply("Ovoz tahlilida xato! ❌")
+    except Exception as e:
+        await message.reply("Ovoz tahlilida xato! ❌")
+    finally:
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
 
 # --- RASM TAHLILI (VISION) ---
 @dp.message(F.photo)
@@ -91,15 +98,15 @@ async def handle_photo(message: types.Message):
             ]}]
         )
         await message.reply(res.choices[0].message.content)
-    except: await message.reply("Rasm tahlilida xato! 🛠")
+    except:
+        await message.reply("Rasm tahlilida xato! 🛠")
 
-# --- CHAT VA O'YIN ---
+# --- MATN VA O'YIN ---
 @dp.message(F.text)
 async def handle_text(message: types.Message):
     uid = message.from_user.id
     text = message.text.lower()
 
-    # O'yin tekshiruvi
     if uid in user_games and message.text.isdigit():
         num = int(message.text)
         if num == user_games[uid]:
@@ -108,21 +115,20 @@ async def handle_text(message: types.Message):
             await message.answer("⬆️ Kattaroq" if num < user_games[uid] else "⬇️ Kichikroq")
         return
 
-    # Shaxsiyat
     if any(x in text for x in ["yaratgan", "muallif", "dasturchi"]):
         return await message.answer("🚀 Meni **Qadamboyev Amirbek** yaratgan! 😎")
 
-    # AI Javob
     try:
         res = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
-                {"role": "system", "content": "Sen Amirbek AI botisan. Meta yoki Llama emassan."},
+                {"role": "system", "content": "Sen Amirbek AI botisan. Emojilardan foydalan."},
                 {"role": "user", "content": message.text}
             ]
         )
         await message.answer(res.choices[0].message.content)
-    except: await message.answer("AI hozir band... 😴")
+    except:
+        await message.answer("AI hozir band... 😴")
 
 # --- CALLBACKS ---
 @dp.callback_query(F.data == "game")
@@ -136,9 +142,10 @@ async def admin_info(call: types.CallbackQuery):
     await call.message.answer("👨‍💻 Dasturchi: @qadamboyevvv_07\nInstagram: Qadamboyevvv_07")
     await call.answer()
 
+# --- RENDER UCHUN ASOSIY QISM ---
 async def main():
-    threading.Thread(target=run_flask, daemon=True).start()
-    await dp.start_polling(bot)
+    print("Bot xavfsiz rejimda ishga tushdi... ✅")
+    await dp.start_polling(bot, skip_updates=True)
 
 if __name__ == "__main__":
     asyncio.run(main())
