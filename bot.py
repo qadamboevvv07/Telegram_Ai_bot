@@ -17,10 +17,26 @@ def run_flask():
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 ADMIN_ID = 5809175944 
+USER_FILE = "users.txt" # Foydalanuvchilar ro'yxati saqlanadigan joy
 
 client = Groq(api_key=GROQ_API_KEY)
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
+
+# --- FOYDALANUVCHILARNI RO'YXATGA OLISH FUNKSIYASI ---
+def add_user(user_id):
+    if not os.path.exists(USER_FILE):
+        with open(USER_FILE, "w") as f: f.write("")
+    with open(USER_FILE, "r") as f:
+        users = f.read().splitlines()
+    if str(user_id) not in users:
+        with open(USER_FILE, "a") as f:
+            f.write(f"{user_id}\n")
+
+def get_users_count():
+    if not os.path.exists(USER_FILE): return 0
+    with open(USER_FILE, "r") as f:
+        return len(f.read().splitlines())
 
 # --- ADMINNI TANISH TIZIMI (Xotira uchun) ---
 def get_persona(user_id):
@@ -47,6 +63,7 @@ def main_menu():
 # --- START ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
+    add_user(message.from_user.id) # Yangi odam kelsa, ro'yxatga qo'shadi
     reply = "Salom Admin Amirbek! 👑 Buyruqlaringizni bajarishga tayyorman." if message.from_user.id == ADMIN_ID else "Salom! Men Amirbek Super AI botiman."
     await message.answer(reply, reply_markup=main_menu())
 
@@ -60,11 +77,12 @@ async def admin_info(message: types.Message):
            f"Sizning yagona yaratuvchingiz! ❤️")
     await message.answer(msg)
 
-# --- 2. STATISTIKA (Yo'qolmaydigan qilib tuzatildi) ---
+# --- 2. STATISTIKA (Haqiqiy raqam faqat Admin uchun) ---
 @dp.message(F.text == "📊 Statistika")
 async def show_stats(message: types.Message):
+    count = get_users_count() # Haqiqiy sonni hisoblaydi
     if message.from_user.id == ADMIN_ID:
-        await message.answer("📊 Bizning oilamizda hozirda **1** nafar a'zo bor! 🤴 liberty ✨")
+        await message.answer(f"📊 Bizning oilamizda hozirda **{count}** nafar a'zo bor! 🤴 liberty ✨")
     else:
         await message.answer("📊 Statistika: Bot foydalanuvchilari soni oshib bormoqda!")
 
